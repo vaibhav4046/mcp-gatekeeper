@@ -1,0 +1,38 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: mcp-gatekeeper-pg
+    environment:
+      POSTGRES_USER: gatekeeper          # owner: used only by tests and the benchmark harness
+      POSTGRES_PASSWORD: gatekeeper
+      POSTGRES_DB: gatekeeper
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./docker/init/01-roles.sql:/docker-entrypoint-initdb.d/01-roles.sql:ro
+      - ./benchmarks/schema.sql:/docker-entrypoint-initdb.d/02-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gatekeeper -d gatekeeper"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  gatekeeper:
+    profiles: ["app"]                    # `docker compose --profile app up -d` to run the server too
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://gatekeeper_app:gatekeeper_app@postgres:5432/gatekeeper
+      GATEKEEPER_AGENT: default
+    ports:
+      - "8000:8000"
+    read_only: true
+    tmpfs:
+      - /app/traces:uid=10001
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8000), 2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 20

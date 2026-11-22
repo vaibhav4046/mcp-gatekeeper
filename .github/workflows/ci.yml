@@ -1,0 +1,71 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint-and-types:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.11"
+      - run: uv sync --locked
+      - name: ruff
+        run: make lint
+      - name: mypy --strict
+        run: make typecheck
+
+  test-and-benchmark:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: gatekeeper
+          POSTGRES_PASSWORD: gatekeeper
+          POSTGRES_DB: gatekeeper
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U gatekeeper -d gatekeeper"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+    env:
+      DATABASE_URL: postgresql://gatekeeper:gatekeeper@localhost:5432/gatekeeper
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.11"
+      - run: uv sync --locked
+      - name: Unit + MCP protocol tests
+        run: make test
+      - name: Persona E2E tests
+        run: make test-personas
+      - name: Benchmark (50 scenarios, unprotected vs protected)
+        run: make benchmark
+      - name: Verify a generated trace
+        run: make verify-trace
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: benchmark-results
+          path: |
+            benchmarks/results.json
+            benchmarks/results.md
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t mcp-gatekeeper:ci .
+      - name: Image runs as non-root
+        run: test "$(docker image inspect mcp-gatekeeper:ci --format '{{.Config.User}}')" = "10001"
+      - name: CLI works in the image
+        run: docker run --rm mcp-gatekeeper:ci --help
