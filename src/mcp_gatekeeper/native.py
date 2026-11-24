@@ -25,7 +25,8 @@ class NativePolicy:
     """One long-lived `gatekeeper-cpp` process speaking JSON lines over stdin/stdout."""
 
     def __init__(self, policy: Policy, binary: str | os.PathLike[str] | None = None) -> None:
-        exe = Path(binary or os.environ.get("GATEKEEPER_CPP", DEFAULT_BINARY))
+        env_binary = os.environ.get("GATEKEEPER_CPP")
+        exe = Path(binary) if binary else Path(env_binary) if env_binary else DEFAULT_BINARY
         if not exe.exists():
             raise FileNotFoundError(
                 f"gatekeeper-cpp not found at {exe}; build it with `cmake -S cpp -B cpp/build && cmake --build cpp/build`"
