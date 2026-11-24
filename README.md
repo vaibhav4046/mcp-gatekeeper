@@ -249,7 +249,8 @@ Use it from Python (the binary speaks JSON lines on stdin/stdout, so there is no
 
 ```python
 from mcp_gatekeeper.native import NativePolicy
-with NativePolicy(policy) as native:          # starts cpp/build/gatekeeper-cpp
+
+with NativePolicy(policy) as native:  # starts cpp/build/gatekeeper-cpp
     res = native.check("DELETE FROM orders WHERE 1=1", "scoped_write", {"accounts", "orders"})
 ```
 
