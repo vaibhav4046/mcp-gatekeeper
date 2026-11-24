@@ -1,0 +1,183 @@
+{
+ "default": {
+  "agents": {
+   "analyst": "read_only",
+   "dba": "admin",
+   "default": "scoped_write"
+  },
+  "change_limits": [
+   {
+    "column": "balance",
+    "max_abs_delta": 10000.0,
+    "primary_key": "id",
+    "table": "accounts"
+   }
+  ],
+  "default_agent": "default",
+  "denied_functions": [
+   "current_setting",
+   "dblink",
+   "lo_import",
+   "database_to_xml",
+   "lo_put",
+   "lo_get",
+   "inet_server_port",
+   "dblink_connect",
+   "dblink_exec",
+   "table_to_xml",
+   "query_to_xml",
+   "lo_export",
+   "inet_server_addr",
+   "set_config",
+   "query_to_json"
+  ],
+  "invariants": [
+   {
+    "check": "balance >= 0",
+    "name": "non_negative_balance",
+    "table": "accounts"
+   }
+  ],
+  "limits": {
+   "compensate_on_trip": true,
+   "failure_window_s": 30.0,
+   "lock_timeout_ms": 2000,
+   "max_identical_failures": 3,
+   "max_policy_violations": 3,
+   "max_writes": 20,
+   "session_idle_timeout_s": 300.0,
+   "statement_timeout_ms": 5000
+  },
+  "restricted_schemas": [
+   "information_schema",
+   "pg_toast",
+   "pg_catalog"
+  ],
+  "restricted_tables": [
+   "system_secrets",
+   "audit_logs"
+  ],
+  "roles": {
+   "admin": {
+    "allow_functions": [
+     "pg_sleep"
+    ],
+    "kind": "admin",
+    "max_rows_per_write": 1000,
+    "tables": null
+   },
+   "read_only": {
+    "allow_functions": [],
+    "kind": "read_only",
+    "max_rows_per_write": 10,
+    "tables": {
+     "accounts": {
+      "delete": false,
+      "insert": false,
+      "read": "*",
+      "update": []
+     },
+     "orders": {
+      "delete": false,
+      "insert": false,
+      "read": "*",
+      "update": []
+     }
+    }
+   },
+   "scoped_write": {
+    "allow_functions": [],
+    "kind": "scoped_write",
+    "max_rows_per_write": 10,
+    "tables": {
+     "accounts": {
+      "delete": false,
+      "insert": true,
+      "read": "*",
+      "update": [
+       "balance",
+       "owner"
+      ]
+     },
+     "orders": {
+      "delete": true,
+      "insert": true,
+      "read": "*",
+      "update": [
+       "status",
+       "amount"
+      ]
+     }
+    }
+   }
+  },
+  "version": 1,
+  "version_column": "version"
+ },
+ "narrow": {
+  "agents": {
+   "default": "r"
+  },
+  "change_limits": [],
+  "default_agent": "default",
+  "denied_functions": [
+   "current_setting",
+   "dblink",
+   "lo_import",
+   "database_to_xml",
+   "lo_put",
+   "lo_get",
+   "inet_server_port",
+   "dblink_connect",
+   "dblink_exec",
+   "table_to_xml",
+   "query_to_xml",
+   "lo_export",
+   "inet_server_addr",
+   "set_config",
+   "query_to_json"
+  ],
+  "invariants": [],
+  "limits": {
+   "compensate_on_trip": true,
+   "failure_window_s": 30.0,
+   "lock_timeout_ms": 2000,
+   "max_identical_failures": 3,
+   "max_policy_violations": 3,
+   "max_writes": 20,
+   "session_idle_timeout_s": 300.0,
+   "statement_timeout_ms": 5000
+  },
+  "restricted_schemas": [
+   "information_schema",
+   "pg_toast",
+   "pg_catalog"
+  ],
+  "restricted_tables": [
+   "system_secrets",
+   "audit_logs"
+  ],
+  "roles": {
+   "r": {
+    "allow_functions": [],
+    "kind": "scoped_write",
+    "max_rows_per_write": 10,
+    "tables": {
+     "accounts": {
+      "delete": false,
+      "insert": false,
+      "read": [
+       "id",
+       "owner"
+      ],
+      "update": [
+       "owner"
+      ]
+     }
+    }
+   }
+  },
+  "version": 1,
+  "version_column": "version"
+ }
+}

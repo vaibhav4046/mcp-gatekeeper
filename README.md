@@ -219,6 +219,95 @@ Built on the official MCP Python SDK v2 (`mcp[cli]` 2.3.0). The names this proje
 `from mcp.server import MCPServer` and `from mcp import Client` (in-memory protocol tests), exist
 in that release as written; no API substitutions were needed.
 
+## C++20 policy core (`cpp/`)
+
+The static SQL decision, `policy.check`, is the per-statement hot path: every agent call is parsed and
+walked before anything touches the database. It is recoded in C++20 (CMake, no runtime dependencies;
+GoogleTest is fetched for the tests only). The Python implementation stays the reference and is not
+modified. Only `check` is ported. The breaker, audit log, rollback, fingerprinting and the Postgres
+proxy are still Python.
+
+What the port is: a hand-written lexer and recursive-descent parser for the PostgreSQL subset the policy
+inspects (SELECT with CTEs, joins, subqueries and set operations; INSERT with ON CONFLICT; UPDATE; DELETE;
+shallow CREATE/ALTER/DROP/GRANT/COMMENT), then the same rule order as `policy.py`. It is not a port of
+sqlglot. sqlglot's canonical function names (`string_agg` is `group_concat`, `now` is `current_timestamp`)
+and its argument-count checks are generated from sqlglot 30.33.0 into `cpp/src/sqlglot_tables.inc` by
+`tools/gen_tables.py`; regenerate it when sqlglot is upgraded. Syntax outside the subset is a
+`PARSE_ERROR`, which blocks (fail closed).
+
+Build and test (Linux, g++ 13 or clang 16+, CMake 3.20+):
+
+```bash
+cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release && cmake --build cpp/build -j
+ctest --test-dir cpp/build --output-on-failure
+# sanitizers (ASan + UBSan)
+cmake -S cpp -B cpp/build-san -DCMAKE_BUILD_TYPE=Debug -DGK_SANITIZE=ON && cmake --build cpp/build-san -j
+ctest --test-dir cpp/build-san --output-on-failure
+```
+
+Use it from Python (the binary speaks JSON lines on stdin/stdout, so there is nothing to link):
+
+```python
+from mcp_gatekeeper.native import NativePolicy
+with NativePolicy(policy) as native:          # starts cpp/build/gatekeeper-cpp
+    res = native.check("DELETE FROM orders WHERE 1=1", "scoped_write", {"accounts", "orders"})
+```
+
+### Equivalence with the Python reference
+
+`tools/golden.py` runs `policy.check` (sqlglot 30.33.0) and the C++ binary on the same inputs and compares
+`allowed`, `rule_id`, `is_write`, `is_ddl` and `tables`. The corpus is the SQL from this repo's tests and
+benchmark scenarios, a seeded grammar-based generator, and token-level mutations (to hit parse errors).
+
+| Corpus | Cases | Identical | Both block, different rule | C++ stricter | C++ allows what Python blocks |
+|---|---|---|---|---|---|
+| Checked in (`cpp/tests/golden`, seed 20261124) | 6846 | 6619 (96.7%) | 200 | 23 | 0 |
+| Held out (seed 777, not used while fixing the parser) | 14686 | 14179 (96.5%) | 435 | 58 | 0 |
+
+All 227 divergences in the checked-in corpus are listed in `cpp/tests/golden/known_divergences.json`;
+the GoogleTest suite fails on any divergence that is not listed, and none of the cases ported from
+`tests/test_components.py` diverge. Reason strings are byte-identical in 5031 of 6846 cases (the rest are
+parse-error texts and SQL echoed back from the AST).
+
+Finding in the reference: sqlglot silently drops surplus arguments for some typed functions, so the
+Python policy allows `SELECT to_char(now(), 'x', (SELECT value FROM system_secrets LIMIT 1)) FROM accounts`
+(the subquery never reaches the AST). PostgreSQL itself rejects `to_char` with three arguments, so this
+particular query is not an exploit, but the pattern is a gap for any function where Postgres accepts more
+arguments than sqlglot keeps. The C++ port keeps every argument and blocks it.
+
+### Benchmark
+
+`policy.check` only (parse plus policy walk, no database), same 6846 inputs, per-call wall time.
+Measured 2026-11-24 in WSL2 Ubuntu 24.04 on a 12th Gen Intel i5-12450HX (4 vCPUs given to WSL), a laptop
+that was not otherwise idle. C++: g++ 13.3 CMake Release build (`-O3 -DNDEBUG`). Python 3.12.3, pure-Python
+sqlglot 30.33.0.
+
+| Path | N calls | Median | p99 | Mean |
+|---|---|---|---|---|
+| Python `policy.check` (reference) | 34,230 | 288.7 us | 1410 us | 364.7 us |
+| C++ in-process (`--bench`) | 1,369,200 | 9.9 us | 72.5 us | 15.0 us |
+| Python calling C++ through `NativePolicy` (pipe round trip) | 30,375 | 85.9 us | 350.7 us | 105.2 us |
+
+In-process the C++ check is about 29x faster at the median and 19x at p99. A Python caller using the
+bridge sees about 3.4x at the median, because most of that time is the pipe and JSON round trip; the bridge
+row uses only the default-policy cases (6075 of the 6846), so it is not exactly the same input set.
+Reproduce with `gatekeeper-cpp --policy cpp/tests/golden/policies.json --bench cpp/tests/golden/cases.jsonl --iters 200`
+and `python tools/golden.py bench --iters 5`.
+
+### Limits
+
+- Hand-written subset parser. sqlglot accepts and rejects some odd syntax differently (chained comparisons,
+  `trim(a IS NULL)`, unusual `ON CONFLICT` forms). The differential corpus found no case where C++ allows
+  what Python blocks, but a corpus is not a proof; do not treat the port as a drop-in security boundary
+  without extending the corpus against your own workload.
+- DDL is parsed shallowly: CREATE TABLE/INDEX/VIEW/SEQUENCE/SCHEMA, ALTER TABLE, COMMENT ON. Other admin DDL is
+  blocked as a generic command.
+- When several rules would fire, the first one reported can differ (the port walks the tree in source order
+  by depth, sqlglot in its own argument order). Both block.
+- Nesting is capped (parse error beyond 120 levels / 400-term chains) so hostile input cannot overflow the stack.
+- Sanitizer evidence: the GoogleTest suite passes under ASan+UBSan, and 20,000 byte-mutated statements ran through
+  the sanitized binary with no report. Windows is not part of CI.
+
 ## Layout
 
 ```
@@ -226,6 +315,8 @@ src/mcp_gatekeeper/  config (policy models), policy, verifier, breaker, rollback
                      compensation), audit, proxy, server, cli
 tests/               test_components.py, test_mcp_protocol.py, test_personas.py
 benchmarks/          schema.sql, scenarios.py (50 scenarios), run_benchmark.py, results.*
+cpp/                C++20 port of policy.check (src, tests, golden corpus)
+tools/              golden.py (differential + bench), gen_tables.py
 docker/init/         least-privilege role
 examples/demo.py     the demo above
 ```
