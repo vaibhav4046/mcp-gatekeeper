@@ -1,0 +1,42 @@
+name: cpp-core
+
+on:
+  push:
+    paths: ["cpp/**", "tools/**", ".github/workflows/cpp.yml"]
+  pull_request:
+    paths: ["cpp/**", "tools/**", ".github/workflows/cpp.yml"]
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [release, sanitize]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: |
+          if [ "${{ matrix.mode }}" = "sanitize" ]; then
+            cmake -S cpp -B build -DCMAKE_BUILD_TYPE=Debug -DGK_SANITIZE=ON
+          else
+            cmake -S cpp -B build -DCMAKE_BUILD_TYPE=Release
+          fi
+      - name: Build
+        run: cmake --build build -j
+      - name: Test (GoogleTest; ASan+UBSan in sanitize mode)
+        run: ctest --test-dir build --output-on-failure
+
+  differential:
+    # Re-runs the Python reference (sqlglot) live and diffs it against the C++ binary.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Build
+        run: cmake -S cpp -B build -DCMAKE_BUILD_TYPE=Release -DGK_BUILD_TESTS=OFF && cmake --build build -j
+      - name: Differential (no unlisted divergence; fail-open divergences are zero)
+        run: |
+          uv run --no-project --with sqlglot==30.33.0 --with pydantic --with pyyaml \
+            python tools/golden.py diff --cli build/gatekeeper-cpp --show 0 | tee diff.txt
+          ! grep -q "FAIL-OPEN" diff.txt

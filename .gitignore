@@ -6,3 +6,7 @@ dist/
 .venv
 .pytest_cache/
 traces/
+
+# C++ core build output
+cpp/build/
+
